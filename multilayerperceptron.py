@@ -16,7 +16,7 @@ feed forward + backprop = epoch
 '''
 
 ''' Reading Dataset'''
-dataset = pd.read_csv('test2.csv', header=None, sep=',')[1:]
+dataset = pd.read_csv('max_price_diff/max_price_diff.csv', header=None, sep=',')[1:]
 X, y = dataset.iloc[:,:-1].astype(np.float).values, dataset.iloc[:, -1].astype(np.float).values
 
 # Formatting and Normalization
@@ -24,7 +24,7 @@ y = np.reshape(y, [y.shape[0], 1])
 scaled_X = preprocessing.scale(X)
 
 # Splitting training and testing
-X_train, X_test, y_train, y_test = train_test_split(scaled_X, y, test_size=0.2, random_state=1)
+X_train, X_test, y_train, y_test = train_test_split(scaled_X, y, test_size=0.2, random_state=2)
 total_len = X_train.shape[0]
 
 ''' Parameters '''
@@ -32,7 +32,7 @@ display_step = 1
 learning_rate = 0.003
 hm_epochs = 500
 batch_size = 100
-dropout_rate = 0.1
+dropout_rate = 1.0 # Probability to keep units
 n_nodes_hl1 = 50
 n_nodes_hl2 = 400
 n_nodes_hl3 = 500
@@ -40,11 +40,10 @@ n_nodes_hl4 = 500
 n_classes = 1
 num_features = X_train.shape[1]
 
-saver = tf.train.Saver()
-tf_log = 'tf1.log'
 
 x = tf.placeholder('float', [None, num_features])
 y = tf.placeholder('float', [None, 1])
+keep_prob = tf.placeholder('float') # dropout (keep probability)
 
 weights = {
     'h1': tf.Variable(tf.random_normal([num_features, n_nodes_hl1], 0, 0.1)),
@@ -61,25 +60,31 @@ biases = {
     'out': tf.Variable(tf.random_normal([n_classes], 0, 0.1))
 }
 
-def multilayer_perceptron(data):
+def multilayer_perceptron(data, dropout):
 	l1 = tf.add(tf.matmul(data, weights['h1']), biases['b1'])
 	l1 = tf.nn.relu(l1)
+	l1 = tf.nn.dropout(l1, dropout)
 
 	l2 = tf.add(tf.matmul(l1, weights['h2']), biases['b2'])	
 	l2 = tf.nn.relu(l2) 
+	l2 = tf.nn.dropout(l2, dropout)
 
 	l3 = tf.add(tf.matmul(l2, weights['h3']), biases['b3'])
 	l3 = tf.nn.relu(l3) 
+	l3 = tf.nn.dropout(l3, dropout)
 
 	l4 = tf.add(tf.matmul(l3, weights['h4']), biases['b4'])
 	l4 = tf.nn.relu(l4) 
+	l4 = tf.nn.dropout(l4, dropout)
 
 	output = tf.matmul(l4, weights['out']) + biases['out']
 	return output
 
+saver = tf.train.Saver()
+tf_log = 'tf3.log'
 
 def train_neural_network(x):
-	prediction = multilayer_perceptron(x)
+	prediction = multilayer_perceptron(x, keep_prob)
 	cost = tf.reduce_mean(tf.square(prediction - y))
 
 	optimizer = tf.train.AdamOptimizer(learning_rate = learning_rate).minimize(cost)
@@ -106,8 +111,8 @@ def train_neural_network(x):
 				epoch_y = y_train[i*batch_size:(i+1)*batch_size]
 
 				# Run optimization (backprop) and cost op (to get loss)
-				_ , c = sess.run([optimizer, cost], feed_dict = {x:epoch_x, y:epoch_y})
-				p = sess.run(prediction, feed_dict={x: epoch_x})
+				_ , c = sess.run([optimizer, cost], feed_dict = {x:epoch_x, y:epoch_y, keep_prob: dropout_rate})
+				p = sess.run(prediction, feed_dict={x: epoch_x, keep_prob: 1.0})
 
 				avg_epoch_loss += c / total_batch
 
@@ -123,26 +128,32 @@ def train_neural_network(x):
 
 			if avg_epoch_loss < best_loss:
 				best_loss = avg_epoch_loss
-				saver.save(sess, "mlp_model.ckpt")
+				saver.save(sess, "mlp_model_gen_diff.ckpt")
 				with open(tf_log,'a') as f:
 					f.write(str(epoch)+'\n') 
 
 			epoch += 1
 
-		print('Best Mean Squared Error: ', best_loss)		
+		print('Best Mean Squared Error: ', best_loss)
+
+		accuracy = sess.run(tf.cast(cost, 'float'), feed_dict={x:X_test, y:y_test, keep_prob:1.0})
+		mse = tf.convert_to_tensor(accuracy).eval({x:X_test, y:y_test, keep_prob:1.0})
+		print('Mean Squared Error on Last Set:', mse)
+
+		test_neural_network(X_test, y_test, "mlp_model_gen_diff.ckpt")
 		
 
 ''' Find testing accuracy '''
 def test_neural_network(features, labels, model_file):
-	prediction = multilayer_perceptron(x)
+	prediction = multilayer_perceptron(x, keep_prob)
 	cost = tf.reduce_mean(tf.square(prediction - y))
 
 	with tf.Session() as sess:
 		sess.run(tf.global_variables_initializer())
 		saver.restore(sess, model_file)
 
-		accuracy = sess.run(tf.cast(cost, 'float'), feed_dict={x:features, y:labels})
-		mse = tf.convert_to_tensor(accuracy).eval({x:features, y:labels})
+		accuracy = sess.run(tf.cast(cost, 'float'), feed_dict={x:features, y:labels, keep_prob:1.0})
+		mse = tf.convert_to_tensor(accuracy).eval({x:features, y:labels, keep_prob:1.0})
 		print('Mean Squared Error on Test Set:', mse)
 
 		# return mse
@@ -150,7 +161,7 @@ def test_neural_network(features, labels, model_file):
 
 ''' Make predictions with MLP model '''
 def use_neural_network(features, model_file):
-    prediction = multilayer_perceptron(x)
+    prediction = multilayer_perceptron(x, keep_prob)
         
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
@@ -165,7 +176,7 @@ def use_neural_network(features, model_file):
 if __name__ == "__main__":
 	# train_neural_network(x)	
 
-	test_neural_network(X_test, y_test, "mlp_model.ckpt")
+	test_neural_network(X_test, y_test, "max_price_diff/mlp_model_price.ckpt")
 	
 
 
